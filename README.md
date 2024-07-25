@@ -58,6 +58,26 @@ npm run start
 A browser tab with LiveSplit One should now open. Alternatively, you can use `npm
 run serve` to just host it without opening a browser tab.
 
+## Tauri
+
+Install Tauri CLI
+
+```bash
+npm install --save-dev @tauri-apps/cli
+```
+
+Install Tauri JavaScript Library
+
+```bash
+npm install @tauri-apps/api
+```
+
+```bash
+npm run tauri:icons
+npm run tauri:build-html
+npm run tauri:watch
+```
+
 ## Browser Support
 
 | Browser           | Compatibility | Known Issues                                                                                                                                                                                      |
