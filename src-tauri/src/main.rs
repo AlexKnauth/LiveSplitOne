@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config;
+
 use std::{
     borrow::Cow,
     future::Future,
@@ -7,26 +9,62 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use config::Config;
 use livesplit_core::{
     event::{CommandSink, Event, Result},
     hotkey::KeyCode,
     networking::server_protocol::Command,
-    HotkeyConfig, HotkeySystem, TimeSpan, TimingMethod,
+    HotkeyConfig, HotkeySystem, SharedTimer, TimeSpan, Timer, TimingMethod,
 };
 use tauri::{Manager, Window};
 
 struct State {
+    shared_timer: SharedTimer,
+    #[cfg(feature = "auto-splitting")]
+    runtime: Arc<livesplit_core::auto_splitting::Runtime<SharedTimer>>,
+    config: Arc<RwLock<Config>>,
     hotkey_system: RwLock<Option<HotkeySystem<TauriCommandSink>>>,
     window: RwLock<Option<Window>>,
 }
 
+impl State {
+    fn new(
+        mut config: Config,
+        hotkey_system: RwLock<Option<HotkeySystem<TauriCommandSink>>>,
+    ) -> Self {
+        config.setup_logging();
+
+        let run = config.parse_run_or_default();
+        let mut timer = Timer::new(run).unwrap();
+        config.configure_timer(&mut timer);
+
+        let shared_timer = timer.into_shared();
+
+        #[cfg(feature = "auto-splitting")]
+        let runtime = livesplit_core::auto_splitting::Runtime::new();
+        #[cfg(feature = "auto-splitting")]
+        config.maybe_load_auto_splitter(&shared_timer, &runtime);
+
+        Self {
+            shared_timer,
+            #[cfg(feature = "auto-splitting")]
+            runtime: Arc::new(runtime),
+            config: Arc::new(RwLock::new(config)),
+            hotkey_system,
+            window: RwLock::new(None),
+        }
+    }
+}
+
 #[tauri::command]
 fn set_hotkey_config(state: tauri::State<'_, State>, config: HotkeyConfig) -> bool {
-    if let Some(hotkey_system) = &mut *state.hotkey_system.write().unwrap() {
+    let b = if let Some(hotkey_system) = &mut *state.hotkey_system.write().unwrap() {
         hotkey_system.set_config(config).is_ok()
     } else {
         false
-    }
+    };
+    state.config.write().unwrap().set_hotkeys(config);
+    b
 }
 
 #[tauri::command]
@@ -205,12 +243,10 @@ impl CommandSink for TauriCommandSink {
 
 fn main() {
     let sink = TauriCommandSink(Arc::new(RwLock::new(None)));
-    let hotkey_system = RwLock::new(HotkeySystem::new(sink.clone()).ok());
+    let config = Config::load();
+    let hotkey_system = RwLock::new(config.configure_hotkeys(sink.clone()));
     tauri::Builder::default()
-        .manage(State {
-            hotkey_system,
-            window: RwLock::new(None),
-        })
+        .manage(State::new(config, hotkey_system))
         .setup(move |app| {
             let main_window = app.windows().values().next().unwrap().clone();
             app.state::<State>()

@@ -5,3 +5,5 @@ src/livesplit_core.wasm
 src/livesplit-core
 
 test/screenshots
+
+.vscode/settings.json
