@@ -14,8 +14,8 @@ use anyhow::{Context, Result as AnyhowResult};
 use config::Config;
 #[cfg(feature = "auto-splitting")]
 use livesplit_auto_splitting::{
-    settings, time, AutoSplitter, Config as AutoSplitConfig, Runtime, Timer as AutoSplitTimer,
-    TimerState,
+    settings, time, AutoSplitter, Config as AutoSplitConfig, LogLevel, Runtime,
+    Timer as AutoSplitTimer, TimerState,
 };
 use livesplit_core::{
     event::{CommandSink, Event, Result},
@@ -317,7 +317,11 @@ impl AutoSplitTimer for TauriTimer {
         });
     }
 
-    fn log(&mut self, message: fmt::Arguments<'_>) {
+    fn log_auto_splitter(&mut self, message: fmt::Arguments<'_>) {
+        log::info!("{}", message);
+    }
+
+    fn log_runtime(&mut self, message: fmt::Arguments<'_>, log_level: LogLevel) {
         log::info!("{}", message);
     }
 }
