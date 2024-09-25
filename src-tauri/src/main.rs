@@ -4,56 +4,68 @@ mod config;
 
 use std::{
     borrow::Cow,
+    fmt, fs,
     future::Future,
     str::FromStr,
     sync::{Arc, RwLock},
 };
 
+use anyhow::{Context, Result as AnyhowResult};
 use config::Config;
+#[cfg(feature = "auto-splitting")]
+use livesplit_auto_splitting::{
+    settings, time, AutoSplitter, Config as AutoSplitConfig, Runtime, Timer as AutoSplitTimer,
+    TimerState,
+};
 use livesplit_core::{
     event::{CommandSink, Event, Result},
     hotkey::KeyCode,
     networking::server_protocol::Command,
-    HotkeyConfig, HotkeySystem, SharedTimer, TimeSpan, Timer, TimingMethod,
+    HotkeyConfig, HotkeySystem, TimeSpan, TimingMethod,
 };
 use tauri::{Manager, Window};
 
 struct State {
-    shared_timer: SharedTimer,
     #[cfg(feature = "auto-splitting")]
-    runtime: Arc<livesplit_core::auto_splitting::Runtime<SharedTimer>>,
+    timer: RwLock<Option<TauriTimer>>,
+    #[cfg(feature = "auto-splitting")]
+    runtime: RwLock<Option<AutoSplitter<TauriTimer>>>,
     config: Arc<RwLock<Config>>,
     hotkey_system: RwLock<Option<HotkeySystem<TauriCommandSink>>>,
     window: RwLock<Option<Window>>,
 }
 
 impl State {
-    fn new(
-        mut config: Config,
-        hotkey_system: RwLock<Option<HotkeySystem<TauriCommandSink>>>,
-    ) -> Self {
+    fn new(config: Config, hotkey_system: RwLock<Option<HotkeySystem<TauriCommandSink>>>) -> Self {
         config.setup_logging();
 
-        let run = config.parse_run_or_default();
-        let mut timer = Timer::new(run).unwrap();
-        config.configure_timer(&mut timer);
-
-        let shared_timer = timer.into_shared();
-
-        #[cfg(feature = "auto-splitting")]
-        let runtime = livesplit_core::auto_splitting::Runtime::new();
-        #[cfg(feature = "auto-splitting")]
-        config.maybe_load_auto_splitter(&shared_timer, &runtime);
-
         Self {
-            shared_timer,
             #[cfg(feature = "auto-splitting")]
-            runtime: Arc::new(runtime),
+            timer: RwLock::new(None),
+            #[cfg(feature = "auto-splitting")]
+            runtime: RwLock::new(None),
             config: Arc::new(RwLock::new(config)),
             hotkey_system,
             window: RwLock::new(None),
         }
     }
+}
+
+#[cfg(feature = "auto-splitting")]
+fn runtime_new(
+    path: &str,
+    settings_map: Option<settings::Map>,
+    timer: TauriTimer,
+) -> AnyhowResult<AutoSplitter<TauriTimer>> {
+    let file = fs::read(path).context("Failed reading the file for the auto splitter.")?;
+    let runtime =
+        Runtime::new(AutoSplitConfig::default()).context("Failed creating the runtime.")?;
+    let compiled_auto_splitter = runtime
+        .compile(&file)
+        .context("Failed compiling the auto splitter.")?;
+    compiled_auto_splitter
+        .instantiate(timer, settings_map, None)
+        .context("Failed instantiating the auto splitter.")
 }
 
 #[tauri::command]
@@ -241,8 +253,79 @@ impl CommandSink for TauriCommandSink {
     }
 }
 
+#[cfg(feature = "auto-splitting")]
+#[derive(Clone)]
+struct TauriTimer(Arc<RwLock<Option<Window>>>);
+
+#[cfg(feature = "auto-splitting")]
+impl TauriTimer {
+    fn send(&self, command: Command) {
+        self.0
+            .read()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .emit("command", command)
+            .unwrap();
+    }
+}
+
+#[cfg(feature = "auto-splitting")]
+impl AutoSplitTimer for TauriTimer {
+    fn state(&self) -> TimerState {
+        self.send(Command::GetCurrentState);
+        todo!("receive")
+    }
+
+    fn start(&mut self) {
+        self.send(Command::Start)
+    }
+
+    fn split(&mut self) {
+        self.send(Command::Split)
+    }
+
+    fn skip_split(&mut self) {
+        self.send(Command::SkipSplit)
+    }
+
+    fn undo_split(&mut self) {
+        self.send(Command::UndoSplit)
+    }
+
+    fn reset(&mut self) {
+        // TODO: configure save_attempt
+        self.send(Command::Reset { save_attempt: None })
+    }
+
+    fn set_game_time(&mut self, time: time::Duration) {
+        self.send(Command::SetGameTime { time: time.into() })
+    }
+
+    fn pause_game_time(&mut self) {
+        self.send(Command::PauseGameTime)
+    }
+
+    fn resume_game_time(&mut self) {
+        self.send(Command::ResumeGameTime)
+    }
+
+    fn set_variable(&mut self, key: &str, value: &str) {
+        self.send(Command::SetCustomVariable {
+            key: key.into(),
+            value: value.into(),
+        });
+    }
+
+    fn log(&mut self, message: fmt::Arguments<'_>) {
+        log::info!("{}", message);
+    }
+}
+
 fn main() {
     let sink = TauriCommandSink(Arc::new(RwLock::new(None)));
+    #[cfg(feature = "auto-splitting")]
+    let timer = TauriTimer(Arc::new(RwLock::new(None)));
     let config = Config::load();
     let hotkey_system = RwLock::new(config.configure_hotkeys(sink.clone()));
     tauri::Builder::default()
@@ -254,6 +337,8 @@ fn main() {
                 .write()
                 .unwrap()
                 .replace(main_window.clone());
+            #[cfg(feature = "auto-splitting")]
+            let _ = *timer.0.write().unwrap() = Some(main_window.clone());
             *sink.0.write().unwrap() = Some(main_window);
             Ok(())
         })

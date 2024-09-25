@@ -2270,6 +2270,7 @@ dependencies = [
  "chrono",
  "directories",
  "fern",
+ "livesplit-auto-splitting",
  "livesplit-core",
  "log",
  "once_cell",

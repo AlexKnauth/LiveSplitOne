@@ -26,11 +26,12 @@ serde = { version = "1" }
 serde_derive = { version = "1" }
 serde_json = "1"
 serde_yaml = "0.9.34"
+livesplit-auto-splitting = { path = "../livesplit-core/crates/livesplit-auto-splitting", optional = true }
 livesplit-core = { path = "../livesplit-core" }
 
 [features]
 default = ["auto-splitting"]
-auto-splitting = ["livesplit-core/auto-splitting"]
+auto-splitting = ["livesplit-auto-splitting", "livesplit-core/auto-splitting"]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
 
