@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 #[cfg(feature = "auto-splitting")]
-use livesplit_auto_splitting::AutoSplitter;
+use livesplit_auto_splitting::{
+    settings, AutoSplitter, Config as AutoSplitConfig, Runtime, Timer as AutoSplitTimer,
+};
 use livesplit_core::{
     comparison,
     event::{self, CommandSink, TimerQuery},
@@ -127,5 +129,26 @@ impl Config {
                 .ok()?;
         }
         Some(())
+    }
+
+    #[cfg(feature = "auto-splitting")]
+    pub fn runtime_new<T: AutoSplitTimer>(
+        &self,
+        settings_map: Option<settings::Map>,
+        timer: T,
+    ) -> Result<Option<AutoSplitter<T>>> {
+        let Some(path) = &self.general.auto_splitter else {
+            return Ok(None);
+        };
+        let file = fs::read(path).context("Failed reading the file for the auto splitter.")?;
+        let runtime =
+            Runtime::new(AutoSplitConfig::default()).context("Failed creating the runtime.")?;
+        let compiled_auto_splitter = runtime
+            .compile(&file)
+            .context("Failed compiling the auto splitter.")?;
+        let auto_splitter = compiled_auto_splitter
+            .instantiate(timer, settings_map, None)
+            .context("Failed instantiating the auto splitter.")?;
+        Ok(Some(auto_splitter))
     }
 }

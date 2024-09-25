@@ -7,7 +7,7 @@ use std::{
     fmt, fs,
     future::Future,
     str::FromStr,
-    sync::{Arc, RwLock},
+    sync::{Arc, OnceLock, RwLock},
 };
 
 use anyhow::{Context, Result as AnyhowResult};
@@ -49,23 +49,6 @@ impl State {
             window: RwLock::new(None),
         }
     }
-}
-
-#[cfg(feature = "auto-splitting")]
-fn runtime_new(
-    path: &str,
-    settings_map: Option<settings::Map>,
-    timer: TauriTimer,
-) -> AnyhowResult<AutoSplitter<TauriTimer>> {
-    let file = fs::read(path).context("Failed reading the file for the auto splitter.")?;
-    let runtime =
-        Runtime::new(AutoSplitConfig::default()).context("Failed creating the runtime.")?;
-    let compiled_auto_splitter = runtime
-        .compile(&file)
-        .context("Failed compiling the auto splitter.")?;
-    compiled_auto_splitter
-        .instantiate(timer, settings_map, None)
-        .context("Failed instantiating the auto splitter.")
 }
 
 #[tauri::command]
@@ -268,13 +251,47 @@ impl TauriTimer {
             .emit("command", command)
             .unwrap();
     }
+    fn send_receive(&self, command: Command) -> String {
+        let response: Arc<OnceLock<String>> = Arc::new(OnceLock::new());
+        let response2 = response.clone();
+        let response3 = response.clone();
+        self.0
+            .read()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .once_global("response", move |e| {
+                log::info!("send_receive response callback: before set");
+                response2.set(e.payload().unwrap().to_string()).ok();
+            });
+            self.0
+            .read()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .once("response", move |e| {
+                log::info!("send_receive response callback: before set");
+                response3.set(e.payload().unwrap().to_string()).ok();
+            });
+        log::info!("send_receive: before send");
+        self.send(command);
+        log::info!("send_receive: after send");
+        // loop {
+            if let Some(r) = response.get() {
+                log::info!("send_receive: r = {}", r);
+                return r.to_string();
+            }
+        // }
+        "".to_string()
+    }
 }
 
 #[cfg(feature = "auto-splitting")]
 impl AutoSplitTimer for TauriTimer {
     fn state(&self) -> TimerState {
-        self.send(Command::GetCurrentState);
-        todo!("receive")
+        log::info!("TauriTimer as AutoSplitTimer, state: before send_receive");
+        self.send_receive(Command::GetCurrentState);
+        TimerState::NotRunning
     }
 
     fn start(&mut self) {
@@ -344,6 +361,21 @@ fn main() {
             #[cfg(feature = "auto-splitting")]
             let _ = *timer.0.write().unwrap() = Some(main_window.clone());
             *sink.0.write().unwrap() = Some(main_window);
+            #[cfg(feature = "auto-splitting")]
+            let runtime = app
+                .state::<State>()
+                .config
+                .read()
+                .unwrap()
+                .runtime_new(None, timer)
+                .unwrap();
+            #[cfg(feature = "auto-splitting")]
+            if let Some(r) = runtime {
+                app.state::<State>().runtime.write().unwrap().replace(r);
+                log::info!("before update");
+                app.state::<State>().runtime.read().unwrap().as_ref().unwrap().lock().update().unwrap();
+                log::info!("after update");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
