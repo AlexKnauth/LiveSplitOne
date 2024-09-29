@@ -18,7 +18,7 @@ use livesplit_auto_splitting::{
     Timer as AutoSplitTimer, TimerState,
 };
 use livesplit_core::{
-    event::{CommandSink, Event, Result},
+    event::{self, CommandSink, Event, Result},
     hotkey::KeyCode,
     networking::server_protocol::{self, Command, CommandResult, Response},
     HotkeyConfig, HotkeySystem, TimeSpan, TimingMethod,
@@ -264,9 +264,14 @@ impl TauriTimer {
             .unwrap()
             .emit("command", command)
             .unwrap();
-        let r = self.1.write().unwrap().blocking_recv();
-        log::info!("TauriTimer send_receive: r = {:?}", r);
-        serde_json::from_str(&r.unwrap()).unwrap()
+        for _ in 0..10000 {
+            if let Ok(r) = self.1.write().unwrap().try_recv() {
+                log::info!("TauriTimer send_receive: r = {:?}", r);
+                serde_json::from_str(&r).unwrap()
+            }
+        }
+        log::error!("TauriTimer send_receive: 10,000 failures");
+        CommandResult::Error(server_protocol::Error::Timer { code: event::Error::Unknown })
     }
 }
 
@@ -339,7 +344,7 @@ impl AutoSplitTimer for TauriTimer {
 }
 
 fn main() {
-    let (response_sender, response_receiver) = mpsc::channel::<String>(1);
+    let (response_sender, response_receiver) = mpsc::channel::<String>(16);
     let response_receiver_box = Arc::new(RwLock::new(response_receiver));
     let sink = TauriCommandSink(Arc::new(RwLock::new(None)), response_receiver_box.clone());
     #[cfg(feature = "auto-splitting")]
