@@ -226,7 +226,7 @@ export class LiveSplit extends React.Component<Props, State> {
         window.__TAURI__?.event.listen("command", (event) => {
             const payloadString = JSON.stringify(event.payload);
             ServerProtocol.handleCommand(payloadString, commandSink.getCommandSink().ptr).then((responseString) => {
-                window.__TAURI__?.event.emit("response", responseString);
+                window.__TAURI__?.event.emit("response", JSON.parse(responseString));
             });
         });
 

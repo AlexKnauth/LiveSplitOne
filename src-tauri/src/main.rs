@@ -267,7 +267,7 @@ impl TauriTimer {
         for _ in 0..10000 {
             if let Ok(r) = self.1.write().unwrap().try_recv() {
                 log::info!("TauriTimer send_receive: r = {:?}", r);
-                serde_json::from_str(&r).unwrap()
+                return serde_json::from_str(&r).unwrap();
             }
         }
         log::error!("TauriTimer send_receive: 10,000 failures");
