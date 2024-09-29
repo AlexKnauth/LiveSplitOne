@@ -380,7 +380,7 @@ fn main() {
                 app.state::<State>().runtime.write().unwrap().replace(r);
                 log::info!("before spawn");
                 let app_handle = app.handle();
-                tauri::async_runtime::spawn(async move {
+                std::thread::spawn(move || {
                     let mut i = 0;
                     let mut c = 0;
                     let mut d = 1;
