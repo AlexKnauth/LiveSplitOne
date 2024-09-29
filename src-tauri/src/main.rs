@@ -3,7 +3,7 @@
 mod config;
 
 use std::{
-    borrow::Cow,
+    borrow::{BorrowMut, Cow},
     fmt, fs,
     future::Future,
     str::FromStr,
@@ -20,10 +20,11 @@ use livesplit_auto_splitting::{
 use livesplit_core::{
     event::{CommandSink, Event, Result},
     hotkey::KeyCode,
-    networking::server_protocol::Command,
+    networking::server_protocol::{self, Command, CommandResult, Response},
     HotkeyConfig, HotkeySystem, TimeSpan, TimingMethod,
 };
-use tauri::{Manager, Window};
+use tauri::{async_runtime::Receiver, Manager, Window};
+use tokio::sync::mpsc;
 
 struct State {
     #[cfg(feature = "auto-splitting")]
@@ -103,7 +104,7 @@ fn settings_changed(state: tauri::State<'_, State>, always_on_top: bool) {
 }
 
 #[derive(Clone)]
-struct TauriCommandSink(Arc<RwLock<Option<Window>>>);
+struct TauriCommandSink(Arc<RwLock<Option<Window>>>, Arc<RwLock<Receiver<String>>>);
 
 impl TauriCommandSink {
     fn send(&self, command: Command) {
@@ -114,6 +115,8 @@ impl TauriCommandSink {
             .unwrap()
             .emit("command", command)
             .unwrap();
+        let r = self.1.write().unwrap().try_recv();
+        log::info!("TauriCommandSink send: r = {:?}", r);
     }
 }
 
@@ -238,7 +241,7 @@ impl CommandSink for TauriCommandSink {
 
 #[cfg(feature = "auto-splitting")]
 #[derive(Clone)]
-struct TauriTimer(Arc<RwLock<Option<Window>>>);
+struct TauriTimer(Arc<RwLock<Option<Window>>>, Arc<RwLock<Receiver<String>>>);
 
 #[cfg(feature = "auto-splitting")]
 impl TauriTimer {
@@ -250,48 +253,40 @@ impl TauriTimer {
             .unwrap()
             .emit("command", command)
             .unwrap();
+        let r = self.1.write().unwrap().try_recv();
+        log::info!("TauriTimer send: r = {:?}", r);
     }
-    fn send_receive(&self, command: Command) -> String {
-        let response: Arc<OnceLock<String>> = Arc::new(OnceLock::new());
-        let response2 = response.clone();
-        let response3 = response.clone();
+    fn send_receive(&self, command: Command) -> CommandResult<Response, server_protocol::Error> {
         self.0
             .read()
             .unwrap()
             .as_ref()
             .unwrap()
-            .once_global("response", move |e| {
-                log::info!("send_receive response callback: before set");
-                response2.set(e.payload().unwrap().to_string()).ok();
-            });
-            self.0
-            .read()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .once("response", move |e| {
-                log::info!("send_receive response callback: before set");
-                response3.set(e.payload().unwrap().to_string()).ok();
-            });
-        log::info!("send_receive: before send");
-        self.send(command);
-        log::info!("send_receive: after send");
-        // loop {
-            if let Some(r) = response.get() {
-                log::info!("send_receive: r = {}", r);
-                return r.to_string();
-            }
-        // }
-        "".to_string()
+            .emit("command", command)
+            .unwrap();
+        let r = self.1.write().unwrap().blocking_recv();
+        log::info!("TauriTimer send_receive: r = {:?}", r);
+        serde_json::from_str(&r.unwrap()).unwrap()
     }
 }
 
 #[cfg(feature = "auto-splitting")]
 impl AutoSplitTimer for TauriTimer {
     fn state(&self) -> TimerState {
-        log::info!("TauriTimer as AutoSplitTimer, state: before send_receive");
-        self.send_receive(Command::GetCurrentState);
-        TimerState::NotRunning
+        match self.send_receive(Command::GetCurrentState) {
+            CommandResult::Success(Response::State(s)) => {
+                match s {
+                    server_protocol::State::NotRunning => TimerState::NotRunning,
+                    server_protocol::State::Running(_) => TimerState::Running,
+                    server_protocol::State::Paused(_) => TimerState::Paused,
+                    server_protocol::State::Ended => TimerState::Ended,
+                }
+            }
+            r => {
+                log::error!("expected success state, given {:?}", serde_json::to_string(&r).unwrap());
+                TimerState::NotRunning
+            }
+        }
     }
 
     fn start(&mut self) {
@@ -344,15 +339,21 @@ impl AutoSplitTimer for TauriTimer {
 }
 
 fn main() {
-    let sink = TauriCommandSink(Arc::new(RwLock::new(None)));
+    let (response_sender, response_receiver) = mpsc::channel::<String>(1);
+    let response_receiver_box = Arc::new(RwLock::new(response_receiver));
+    let sink = TauriCommandSink(Arc::new(RwLock::new(None)), response_receiver_box.clone());
     #[cfg(feature = "auto-splitting")]
-    let timer = TauriTimer(Arc::new(RwLock::new(None)));
+    let timer = TauriTimer(Arc::new(RwLock::new(None)), response_receiver_box);
     let config = Config::load();
     let hotkey_system = RwLock::new(config.configure_hotkeys(sink.clone()));
     tauri::Builder::default()
         .manage(State::new(config, hotkey_system))
         .setup(move |app| {
             let main_window = app.windows().values().next().unwrap().clone();
+            main_window.listen("response", move |e| {
+                log::info!("listen response callback: {:?}", e.payload());
+                response_sender.try_send(e.payload().unwrap().to_string()).ok();
+            });
             app.state::<State>()
                 .window
                 .write()
@@ -372,9 +373,27 @@ fn main() {
             #[cfg(feature = "auto-splitting")]
             if let Some(r) = runtime {
                 app.state::<State>().runtime.write().unwrap().replace(r);
-                log::info!("before update");
-                app.state::<State>().runtime.read().unwrap().as_ref().unwrap().lock().update().unwrap();
-                log::info!("after update");
+                log::info!("before spawn");
+                let app_handle = app.handle();
+                tauri::async_runtime::spawn(async move {
+                    let mut i = 0;
+                    let mut c = 0;
+                    let mut d = 1;
+                    loop {
+                        if c == 0 {
+                            log::info!("before update: {}", i);
+                        }
+                        app_handle.state::<State>().runtime.read().unwrap().as_ref().unwrap().lock().update().unwrap();
+                        if c == 0 {
+                            log::info!("after update: {}", i);
+                            d *= 10;
+                            c = d;
+                        }
+                        i += 1;
+                        c -= 1;
+                    }
+                });
+                log::info!("after spawn");
             }
             Ok(())
         })

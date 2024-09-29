@@ -5,7 +5,6 @@ declare interface GlobalTauri {
     event: TauriEventModule;
     notification: TauriNotificationModule;
     http: TauriHttpModule;
-    window: TauriWindowModule;
 }
 
 declare interface TauriModule {
@@ -30,10 +29,6 @@ declare interface TauriNotification {
 
 declare interface TauriHttpModule {
     fetch(url: string, options: { responseType: 3 }): Promise<TauriResponse<Array<number>>>;
-}
-
-declare interface TauriWindowModule {
-    emit(eventName: string, payload?: unknown): Promise<void>;
 }
 
 declare interface TauriResponse<T> {
