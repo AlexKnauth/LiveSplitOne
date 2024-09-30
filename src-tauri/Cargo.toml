@@ -12,6 +12,7 @@ tauri-build = { version = "1", features = [] }
 
 [dependencies]
 anyhow = "1.0.89"
+backtrace = "0.3.74"
 chrono = { version = "0.4.38", features = ["serde", "clock"], default-features = false }
 directories = "5.0.1"
 fern = "0.6.2"

@@ -2285,6 +2285,7 @@ name = "livesplit-one"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "backtrace",
  "chrono",
  "directories",
  "fern",

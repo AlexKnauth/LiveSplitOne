@@ -127,6 +127,10 @@ impl Config {
                 .chain(log_file)
                 .apply()
                 .ok()?;
+
+            std::panic::set_hook(Box::new(|panic_info| {
+                log::error!(target: "PANIC", "{}\n{:?}", panic_info, backtrace::Backtrace::new());
+            }));
         }
         Some(())
     }
