@@ -115,8 +115,7 @@ impl TauriCommandSink {
             .unwrap()
             .emit("command", command)
             .unwrap();
-        let r = self.1.write().unwrap().try_recv();
-        log::info!("TauriCommandSink send: r = {:?}", r);
+        self.1.write().unwrap().try_recv().ok();
     }
 }
 
@@ -253,8 +252,7 @@ impl TauriTimer {
             .unwrap()
             .emit("command", command)
             .unwrap();
-        let r = self.1.write().unwrap().try_recv();
-        log::info!("TauriTimer send: r = {:?}", r);
+        self.1.write().unwrap().try_recv().ok();
     }
     fn send_receive(&self, command: Command) -> CommandResult<Response, server_protocol::Error> {
         self.0
@@ -266,11 +264,11 @@ impl TauriTimer {
             .unwrap();
         for _ in 0..10000 {
             if let Ok(r) = self.1.write().unwrap().try_recv() {
-                log::info!("TauriTimer send_receive: r = {:?}", r);
+                // log::info!("TauriTimer send_receive: r = {:?}", r);
                 return serde_json::from_str(&r).unwrap();
             }
         }
-        log::error!("TauriTimer send_receive: 10,000 failures");
+        // log::error!("TauriTimer send_receive: 10,000 failures");
         CommandResult::Error(server_protocol::Error::Timer { code: event::Error::Unknown })
     }
 }
@@ -288,7 +286,7 @@ impl AutoSplitTimer for TauriTimer {
                 }
             }
             r => {
-                log::error!("expected success state, given {:?}", serde_json::to_string(&r).unwrap());
+                // log::error!("expected success state, given {:?}", serde_json::to_string(&r).unwrap());
                 TimerState::NotRunning
             }
         }
@@ -356,7 +354,7 @@ fn main() {
         .setup(move |app| {
             let main_window = app.windows().values().next().unwrap().clone();
             main_window.listen("response", move |e| {
-                log::info!("listen response callback: {:?}", e.payload());
+                // log::info!("listen response callback: {:?}", e.payload());
                 response_sender.try_send(e.payload().unwrap().to_string()).ok();
             });
             app.state::<State>()
